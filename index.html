@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MTG Deck Evaluator</title>
+
   <style>
     :root {
       --bg: #f6f7f9;
@@ -12,6 +13,8 @@
       --muted: #6b7280;
       --border: #d1d5db;
       --bar: #2563eb;
+      --good: #16a34a;
+      --warn: #d97706;
       --danger: #dc2626;
     }
 
@@ -22,6 +25,8 @@
       --muted: #94a3b8;
       --border: #334155;
       --bar: #60a5fa;
+      --good: #4ade80;
+      --warn: #facc15;
       --danger: #f87171;
     }
 
@@ -33,7 +38,7 @@
     }
 
     .wrap {
-      max-width: 1100px;
+      max-width: 1200px;
       margin: 0 auto;
       padding: 16px;
     }
@@ -56,7 +61,7 @@
 
     textarea {
       width: 100%;
-      min-height: 280px;
+      min-height: 320px;
       box-sizing: border-box;
       background: var(--card);
       color: var(--text);
@@ -91,6 +96,10 @@
       grid-template-columns: repeat(2, 1fr);
     }
 
+    .grid3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
     .grid4 {
       grid-template-columns: repeat(4, 1fr);
     }
@@ -106,9 +115,13 @@
       word-break: break-word;
     }
 
+    .small {
+      font-size: 13px;
+    }
+
     .bar-row {
       display: grid;
-      grid-template-columns: 64px 1fr 36px;
+      grid-template-columns: 72px 1fr 40px;
       gap: 8px;
       align-items: center;
       margin: 8px 0;
@@ -147,12 +160,39 @@
       min-height: 2px;
     }
 
-    .danger {
-      color: var(--danger);
+    .score-row {
+      border-top: 1px solid var(--border);
+      padding: 10px 0;
     }
 
-    @media (max-width: 760px) {
+    .score-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: bold;
+    }
+
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      margin: 2px;
+    }
+
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .danger { color: var(--danger); }
+
+    ul {
+      margin-top: 6px;
+      padding-left: 20px;
+    }
+
+    @media (max-width: 820px) {
       .grid2,
+      .grid3,
       .grid4 {
         grid-template-columns: 1fr;
       }
@@ -164,14 +204,16 @@
   </style>
 </head>
 
-<body>
-  <div id="app" class="wrap">
+<body class="dark">
+  <div class="wrap">
     <div class="top">
       <div>
         <h1>MTG Deck Evaluator</h1>
-        <p class="muted">Standard / Legacy legality, mana curve, colors and deck structure.</p>
+        <p class="muted">
+          Standard / Legacy legality, structural score, meta benchmark, mana curve and deck composition.
+        </p>
       </div>
-      <button class="secondary" onclick="toggleDark()">Dark Mode</button>
+      <button class="secondary" onclick="toggleDark()">Toggle Light / Dark</button>
     </div>
 
     <div class="grid grid2">
@@ -180,6 +222,7 @@
         <textarea id="deck" placeholder="Deck
 4 Monastery Swiftspear
 4 Lightning Strike
+4 Monstrous Rage
 20 Mountain
 
 Sideboard
@@ -219,12 +262,12 @@ Sideboard
 
     <div class="grid grid2">
       <div class="card">
-        <h2>Standard</h2>
+        <h2>Standard Report</h2>
         <div id="standard"></div>
       </div>
 
       <div class="card">
-        <h2>Legacy</h2>
+        <h2>Legacy Report</h2>
         <div id="legacy"></div>
       </div>
     </div>
@@ -339,7 +382,7 @@ Sideboard
     }
 
     function isBasicName(name) {
-      return BASICS.has(name.toLowerCase());
+      return BASICS.has(String(name).toLowerCase());
     }
 
     function fullText(entry) {
@@ -369,7 +412,7 @@ Sideboard
 
       return {
         creature: /creature/.test(t),
-        interaction: /destroy|exile target|counter target|deals? \d+ damage|discard|sacrifice/.test(t),
+        interaction: /destroy|exile target|counter target|deals? \d+ damage|discard|sacrifice|damage to any target/.test(t),
         draw: /draw|scry|surveil|look at the top|explore/.test(t),
         ramp: /add .* mana|treasure|search your library.*land/.test(t)
       };
@@ -377,6 +420,10 @@ Sideboard
 
     function qty(entries) {
       return entries.reduce((sum, entry) => sum + entry.qty, 0);
+    }
+
+    function clamp(n, min, max) {
+      return Math.max(min, Math.min(max, n));
     }
 
     function stats(entries) {
@@ -447,6 +494,223 @@ Sideboard
       }
 
       return problems;
+    }
+
+    function structureScore(entries, format) {
+      const s = stats(entries);
+      const type = archetype(entries);
+
+      const singletons = s.main.filter(e => !isBasic(e) && e.qty === 1).length;
+      const core = s.main
+        .filter(e => !isBasic(e) && e.qty >= 3)
+        .reduce((sum, e) => sum + e.qty, 0);
+
+      const tapped = s.main
+        .filter(e => isLand(e) && /enters (the battlefield )?tapped/i.test(e.card?.oracle_text || ""))
+        .reduce((sum, e) => sum + e.qty, 0);
+
+      const ideal = type === "Aggro" ? [20, 24] : type === "Control" ? [25, 28] : [23, 26];
+      const idealMid = (ideal[0] + ideal[1]) / 2;
+
+      const deckPlan =
+        type === "Rogue / Synergy" ? 8 :
+        format === "legacy" ? 11 :
+        13;
+
+      const landScore =
+        s.landQty >= ideal[0] && s.landQty <= ideal[1]
+          ? 8
+          : clamp(8 - Math.abs(s.landQty - idealMid), 0, 8);
+
+      const manaBase = clamp(
+        landScore + 9 - tapped * (format === "legacy" ? 1.5 : 0.6),
+        0,
+        20
+      );
+
+      const curve = clamp(
+        15
+        - Math.max(0, s.avgMv - (type === "Aggro" ? 2.2 : 3.1)) * 6
+        + (s.lowQty >= 10 ? 2 : -2)
+        - (format === "legacy" ? 2 : 0),
+        0,
+        15
+      );
+
+      const density = clamp(
+        6
+        + Math.min(5, s.interactionQty / 2)
+        + Math.min(3, s.drawQty / 2)
+        + (s.creatureQty >= 14 || type === "Control" ? 3 : 0),
+        0,
+        15
+      );
+
+      const consistency = clamp(
+        10
+        + Math.min(5, core / 8)
+        - Math.max(0, singletons - 4),
+        0,
+        15
+      );
+
+      const cardQuality = clamp(
+        7
+        + (s.avgMv <= 3 ? 2 : 0)
+        + (format === "legacy" ? -4 : 0),
+        0,
+        10
+      );
+
+      const sideboard =
+        s.sideQty === 15 ? 7 :
+        s.sideQty > 0 ? 3 :
+        0;
+
+      return [
+        {
+          label: "Deckplan / Archetype",
+          max: 15,
+          value: Math.round(deckPlan),
+          note: type
+        },
+        {
+          label: "Mana Base",
+          max: 20,
+          value: Math.round(manaBase),
+          note: s.landQty + " lands, " + tapped + " tapped lands"
+        },
+        {
+          label: "Curve / Tempo",
+          max: 15,
+          value: Math.round(curve),
+          note: "Average MV " + s.avgMv.toFixed(2)
+        },
+        {
+          label: "Functional Density",
+          max: 15,
+          value: Math.round(density),
+          note: s.creatureQty + " threats, " + s.interactionQty + " interaction, " + s.drawQty + " draw"
+        },
+        {
+          label: "Consistency",
+          max: 15,
+          value: Math.round(consistency),
+          note: core + " cards in 3–4x core, " + singletons + " singletons"
+        },
+        {
+          label: "Card Quality",
+          max: 10,
+          value: Math.round(cardQuality),
+          note: format === "legacy" ? "Legacy efficiency penalty applied" : "Standard efficiency heuristic"
+        },
+        {
+          label: "Sideboard",
+          max: 10,
+          value: sideboard,
+          note: s.sideQty + "/15 cards"
+        }
+      ];
+    }
+
+    function metaBenchmark(entries, format) {
+      const s = stats(entries);
+      const type = archetype(entries);
+      const nonland = Math.max(1, s.mainQty - s.landQty);
+      const lowRate = s.lowQty / nonland;
+
+      if (format === "standard") {
+        return [
+          {
+            label: "Archetype Fit",
+            max: 5,
+            value: type === "Rogue / Synergy" ? 2 : 4,
+            note: type
+          },
+          {
+            label: "Core Structure",
+            max: 5,
+            value: s.main.filter(e => e.qty >= 3 && !isBasic(e)).length >= 6 ? 4 : 2,
+            note: "Repeated core cards"
+          },
+          {
+            label: "Curve Match",
+            max: 3,
+            value: lowRate >= 0.35 ? 3 : 1,
+            note: Math.round(lowRate * 100) + "% low curve"
+          },
+          {
+            label: "Mana Match",
+            max: 3,
+            value: s.landQty >= 22 && s.landQty <= 27 ? 3 : 1,
+            note: s.landQty + " lands"
+          },
+          {
+            label: "Sideboard",
+            max: 4,
+            value: s.sideQty === 15 ? 3 : s.sideQty > 0 ? 1 : 0,
+            note: s.sideQty + "/15"
+          }
+        ];
+      }
+
+      return [
+        {
+          label: "Archetype Fit",
+          max: 4,
+          value: type === "Rogue / Synergy" ? 1 : 2,
+          note: type
+        },
+        {
+          label: "Legacy Efficiency",
+          max: 4,
+          value: 1,
+          note: "No live staple database connected"
+        },
+        {
+          label: "Mana Quality",
+          max: 3,
+          value: s.landQty >= 18 && s.landQty <= 24 ? 2 : 1,
+          note: s.landQty + " lands"
+        },
+        {
+          label: "Interaction",
+          max: 4,
+          value: s.interactionQty >= 8 ? 2 : 1,
+          note: s.interactionQty + " interaction"
+        },
+        {
+          label: "Sideboard Hate",
+          max: 3,
+          value: s.sideQty === 15 ? 1 : 0,
+          note: "Heuristic only"
+        },
+        {
+          label: "Speed",
+          max: 2,
+          value: s.avgMv <= 2.2 ? 1 : 0,
+          note: "Average MV " + s.avgMv.toFixed(2)
+        }
+      ];
+    }
+
+    function sumScore(lines) {
+      return lines.reduce((sum, line) => sum + line.value, 0);
+    }
+
+    function ratingLabel(score, format) {
+      if (format === "standard") {
+        if (score >= 83) return "Meta-near";
+        if (score >= 71) return "Competitive";
+        if (score >= 56) return "FNM-ready";
+        if (score >= 41) return "Playable";
+        return "Casual";
+      }
+
+      if (score >= 85) return "Legacy Competitive";
+      if (score >= 70) return "Legacy Rogue";
+      if (score >= 50) return "Legacy casual / low";
+      return "Legacy weak";
     }
 
     function renderKpis(entries) {
@@ -560,17 +824,51 @@ Sideboard
       );
     }
 
-    function renderLegality(entries) {
-      const std = legality(entries, "standard");
-      const leg = legality(entries, "legacy");
+    function renderScoreLines(lines) {
+      return lines.map(line => `
+        <div class="score-row">
+          <div class="score-head">
+            <span>${line.label}</span>
+            <span>${line.value} / ${line.max}</span>
+          </div>
+          <div class="muted">${line.note}</div>
+        </div>
+      `).join("");
+    }
 
-      document.getElementById("standard").innerHTML = std.length
-        ? `<p class="danger"><strong>Issues</strong></p><ul>${std.map(x => `<li>${x}</li>`).join("")}</ul>`
-        : `<p><strong>Legal</strong></p>`;
+    function renderReport(entries, format, targetId) {
+      const legalProblems = legality(entries, format);
+      const structure = structureScore(entries, format);
+      const meta = metaBenchmark(entries, format);
 
-      document.getElementById("legacy").innerHTML = leg.length
-        ? `<p class="danger"><strong>Issues</strong></p><ul>${leg.map(x => `<li>${x}</li>`).join("")}</ul>`
-        : `<p><strong>Legal</strong></p>`;
+      const structureTotal = sumScore(structure);
+      const metaTotal = sumScore(meta);
+
+      const legalHtml = legalProblems.length
+        ? `<p class="danger"><strong>Legality: Issues</strong></p><ul>${legalProblems.map(x => `<li>${x}</li>`).join("")}</ul>`
+        : `<p class="good"><strong>Legality: Legal</strong></p>`;
+
+      document.getElementById(targetId).innerHTML = `
+        ${legalHtml}
+
+        <div class="card">
+          <div class="muted">Structural Score</div>
+          <div class="big">${structureTotal} / 100</div>
+          <div class="muted">${ratingLabel(structureTotal, format)}</div>
+        </div>
+
+        <div class="card">
+          <div class="muted">Meta Benchmark</div>
+          <div class="big">${metaTotal} / 20</div>
+          <div class="muted">Heuristic comparison, not live tournament data.</div>
+        </div>
+
+        <h3>Structural Evaluation</h3>
+        ${renderScoreLines(structure)}
+
+        <h3>Meta Benchmark</h3>
+        ${renderScoreLines(meta)}
+      `;
     }
 
     async function evaluateDeck() {
@@ -611,7 +909,8 @@ Sideboard
 
         renderKpis(entries);
         renderCharts(entries);
-        renderLegality(entries);
+        renderReport(entries, "standard", "standard");
+        renderReport(entries, "legacy", "legacy");
       } catch (error) {
         document.getElementById("status").textContent = "Error: " + error.message;
       }
